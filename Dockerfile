@@ -1,22 +1,21 @@
 # Stage 1 - Create yarn install skeleton layer
-FROM node:14-buster-slim AS packages
+FROM node:14-buster AS packages
 
 WORKDIR /app
 COPY package.json yarn.lock ./
 
 COPY packages packages
-# Comment this out if you don't have any internal plugins
 # COPY plugins plugins
 
-RUN find packages \! -name "package.json" -mindepth 2 -maxdepth 2 -exec rm -rf {} \+
+RUN find packages \! -name "package.json" -mindepth 2 -maxdepth 2 -print | xargs rm -rf
 
 # Stage 2 - Install dependencies and build packages
-FROM node:14-buster-slim AS build
+FROM node:14-buster AS build
 
 WORKDIR /app
 COPY --from=packages /app .
 
-RUN yarn install --frozen-lockfile --network-timeout 600000 && rm -rf "$(yarn cache dir)"
+RUN yarn install --network-timeout 600000 && rm -rf "$(yarn cache dir)"
 
 COPY . .
 
@@ -24,21 +23,31 @@ RUN yarn tsc
 RUN yarn --cwd packages/backend backstage-cli backend:bundle --build-dependencies
 
 # Stage 3 - Build the actual backend image and install production dependencies
-FROM node:14-buster-slim
+FROM node:14-buster
 
 WORKDIR /app
 
-# Copy the install dependencies from the build stage and context
+# Copy from build stage
 COPY --from=build /app/yarn.lock /app/package.json /app/packages/backend/dist/skeleton.tar.gz ./
 RUN tar xzf skeleton.tar.gz && rm skeleton.tar.gz
 
-RUN yarn install --frozen-lockfile --production --network-timeout 600000 && rm -rf "$(yarn cache dir)"
+RUN yarn install --production --network-timeout 600000 && rm -rf "$(yarn cache dir)"
 
-# Copy the built packages from the build stage
 COPY --from=build /app/packages/backend/dist/bundle.tar.gz .
 RUN tar xzf bundle.tar.gz && rm bundle.tar.gz
 
-# Copy any other files that we need at runtime
-COPY app-config.yaml ./
+COPY app-config.yaml app-config.heroku.yaml ./
 
-CMD ["node", "packages/backend", "--config", "app-config.yaml"]
+ENV PORT 7000
+
+ENV GITHUB_PRODUCTION_CLIENT_ID ""
+ENV GITHUB_PRODUCTION_CLIENT_SECRET ""
+
+ENV GITHUB_DEVELOPMENT_CLIENT_ID ""
+ENV GITHUB_DEVELOPMENT_CLIENT_SECRET ""
+
+# For now we need to manually add these configs through environment variables but in the
+# future, we should be able to fetch the frontend config from the backend somehow
+ENV APP_CONFIG_app_baseUrl "https://demo.backstage.io"
+ENV APP_CONFIG_backend_baseUrl "https://demo.backstage.io"
+ENV APP_CONFIG_auth_environment "production"
